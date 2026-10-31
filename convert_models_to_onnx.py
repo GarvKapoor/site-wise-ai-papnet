@@ -48,3 +48,4 @@ for scaler in ["model2_scaler.pkl", "model3_scaler.pkl"]:
         print(f"✓ Copied {scaler} to {ONNX_DIR}")
 
 print("\nAll models converted to ONNX successfully!")
+

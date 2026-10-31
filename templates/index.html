@@ -299,7 +299,7 @@
                     if (!response.ok) throw new Error("Could not load sample");
                     const blob = await response.blob();
                     const file = new File([blob], `${preset.id}.jpg`, { type: "image/jpeg" });
-                    setPreview(preset.sampleUrl);
+                    setPreviewUrl(preset.sampleUrl);
                     setImageFile(file);
                     setScanPhase("TILE LOADED · EXECUTING SCAN...");
                     setScanProgress(10);
@@ -312,12 +312,12 @@
 
             // Run Analysis with Scanning Stage Telemetry
             const runAnalysis = async (fileOverride = null, facilityOverride = null) => {
-                const targetFile = fileOverride || imageFile;
+                const targetFile = (fileOverride instanceof File || fileOverride instanceof Blob) ? fileOverride : imageFile;
                 if (!targetFile) {
                     setError("Please select or drop a satellite image first.");
                     return;
                 }
-                const targetFac = facilityOverride || selectedFacility;
+                const targetFac = (typeof facilityOverride === "string") ? facilityOverride : selectedFacility;
 
                 setLoading(true);
                 setError(null);
@@ -663,7 +663,7 @@
 
                                     {/* Action Button */}
                                     <button
-                                        onClick={runAnalysis}
+                                        onClick={() => runAnalysis()}
                                         disabled={loading || !imageFile}
                                         class={`mt-6 w-full py-3.5 rounded-xl font-bold text-sm tracking-wide uppercase transition-all duration-200 flex items-center justify-center space-x-2 ${
                                             loading
