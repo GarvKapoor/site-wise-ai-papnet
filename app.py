@@ -4,33 +4,11 @@ import numpy as np
 import joblib
 import os
 
-try:
-    import tensorflow as tf
-except ImportError:
-    tf = None
-
 
 # ============================================================
 # SITEWISE AI
-# Flask Backend
-#
-# FINAL PIPELINE:
-#
-# Satellite Image
-#       ↓
-# Model 1 — EfficientNetB0
-#       ↓
-# Land Classification + 10 Probabilities
-#       +
-# 8 Visual Features
-#       ↓
-# Model 3 — Site Recommender
-#       ↓
-# 8 Recommendation Scores
-#       ↓
-# Best Site Recommendation
-#
-# Model 2 is NOT used in the main website flow.
+# Ultra-Low-Memory Backend for Cloud Deployment (Render.com 512MB RAM)
+# Supports ONNX Runtime & LiteRT / TFLite (RAM < 120MB total)
 # ============================================================
 
 
@@ -39,16 +17,31 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
 
 
-# Try importing PAPNet custom layers for serialization support
-try:
-    from training_papnet.papnet_model import PatternAffinityModule, PAPResidualBlock
-    PAPNET_AVAILABLE = True
-except Exception:
-    PAPNET_AVAILABLE = False
+# ============================================================
+# 1. ONNX RUNTIME WRAPPER (DEFAULT LIGHTWEIGHT ENGINE: ~100MB RAM)
+# ============================================================
+
+class ONNXModelWrapper:
+    def __init__(self, model_path):
+        import onnxruntime as ort
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 1
+        opts.inter_op_num_threads = 1
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        self.session = ort.InferenceSession(model_path, opts, providers=["CPUExecutionProvider"])
+        self.input_name = self.session.get_inputs()[0].name
+        self.output_name = self.session.get_outputs()[0].name
+        self.input_shape = tuple(self.session.get_inputs()[0].shape)
+        self.output_shape = tuple(self.session.get_outputs()[0].shape)
+
+    def predict(self, x, verbose=0):
+        tensor_x = np.array(x, dtype=np.float32)
+        outputs = self.session.run([self.output_name], {self.input_name: tensor_x})
+        return outputs[0]
 
 
 # ============================================================
-# TFLITE WRAPPER FOR LOW-MEMORY DEPLOYMENT (RENDER FREE TIER)
+# 2. TFLITE / LITERT WRAPPER (FALLBACK LIGHTWEIGHT ENGINE: ~120MB RAM)
 # ============================================================
 
 class TFLiteModelWrapper:
@@ -59,10 +52,11 @@ class TFLiteModelWrapper:
             try:
                 from tflite_runtime.interpreter import Interpreter
             except ImportError:
-                if tf is not None:
+                try:
+                    import tensorflow as tf
                     Interpreter = tf.lite.Interpreter
-                else:
-                    raise ImportError("No LiteRT/TFLite interpreter found.")
+                except ImportError:
+                    raise ImportError("No LiteRT, TFLite-runtime, or TensorFlow interpreter found.")
         self.interpreter = Interpreter(model_path=model_path)
         self.interpreter.allocate_tensors()
         self.input_details = self.interpreter.get_input_details()
@@ -77,46 +71,78 @@ class TFLiteModelWrapper:
         return self.interpreter.get_tensor(self.output_details[0]['index'])
 
 
-def load_model_flexible(tflite_path, keras_path, custom_objs=None):
-    if os.path.exists(tflite_path):
+# ============================================================
+# 3. FLEXIBLE MODEL LOADER
+# Prioritizes ONNX -> TFLite -> Keras (lazy load)
+# ============================================================
+
+def load_model_flexible(onnx_path, tflite_path, keras_path, custom_objs_fn=None):
+    # 1. Try ONNX Runtime (fastest CPU inference, memory ~100MB)
+    if onnx_path and os.path.exists(onnx_path):
+        try:
+            wrapper = ONNXModelWrapper(onnx_path)
+            return wrapper, "ONNX"
+        except Exception as e:
+            print(f"Notice: Failed to load ONNX model from {onnx_path}: {e}")
+
+    # 2. Try LiteRT / TFLite (lightweight Google edge runtime, memory ~120MB)
+    if tflite_path and os.path.exists(tflite_path):
         try:
             wrapper = TFLiteModelWrapper(tflite_path)
             return wrapper, "TFLite"
         except Exception as e:
             print(f"Notice: Failed to load TFLite model from {tflite_path}: {e}")
-    if os.path.exists(keras_path) and tf is not None:
+
+    # 3. Fallback to Keras / Full TensorFlow ONLY if lightweight runtimes are missing
+    if keras_path and os.path.exists(keras_path):
         try:
+            import tensorflow as tf
+            custom_objs = custom_objs_fn() if callable(custom_objs_fn) else custom_objs_fn
             m = tf.keras.models.load_model(keras_path, custom_objects=custom_objs)
             return m, "Keras"
         except Exception as e:
             print(f"Notice: Failed to load Keras model from {keras_path}: {e}")
+
     return None, None
 
 
 # ============================================================
-# PATHS & ACTIVE MODEL SELECTION
+# PATHS & MODEL SELECTION
 # ============================================================
 
 BASE_DIR = os.path.dirname(
     os.path.abspath(__file__)
 )
 
+ONNX_MODEL_DIR = os.path.join(BASE_DIR, "models_onnx")
 OPT_MODEL_DIR = os.path.join(BASE_DIR, "models_optimized")
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 
+_papnet_onnx = os.path.join(ONNX_MODEL_DIR, "model1_papnet.onnx")
 _papnet_tflite = os.path.join(OPT_MODEL_DIR, "model1_papnet.tflite")
 _papnet_keras = os.path.join(MODEL_DIR, "model1_papnet.keras")
 
+_efficientnet_onnx = os.path.join(ONNX_MODEL_DIR, "model1_efficientnet.onnx")
 _efficientnet_tflite = os.path.join(OPT_MODEL_DIR, "model1_efficientnet.tflite")
 _efficientnet_keras = os.path.join(MODEL_DIR, "model1_efficientnet.keras")
 
+_model2_onnx = os.path.join(ONNX_MODEL_DIR, "model2_suitability.onnx")
 _model2_tflite = os.path.join(OPT_MODEL_DIR, "model2_suitability.tflite")
 _model2_keras = os.path.join(MODEL_DIR, "model2_suitability.keras")
-_model2_scaler_path = os.path.join(OPT_MODEL_DIR, "model2_scaler.pkl") if os.path.exists(os.path.join(OPT_MODEL_DIR, "model2_scaler.pkl")) else os.path.join(MODEL_DIR, "model2_scaler.pkl")
 
+_model3_onnx = os.path.join(ONNX_MODEL_DIR, "model3_recommender.onnx")
 _model3_tflite = os.path.join(OPT_MODEL_DIR, "model3_recommender.tflite")
 _model3_keras = os.path.join(MODEL_DIR, "model3_recommender.keras")
-_model3_scaler_path = os.path.join(OPT_MODEL_DIR, "model3_scaler.pkl") if os.path.exists(os.path.join(OPT_MODEL_DIR, "model3_scaler.pkl")) else os.path.join(MODEL_DIR, "model3_scaler.pkl")
+
+def _find_scaler(filename):
+    for d in [ONNX_MODEL_DIR, OPT_MODEL_DIR, MODEL_DIR]:
+        p = os.path.join(d, filename)
+        if os.path.exists(p):
+            return p
+    return os.path.join(MODEL_DIR, filename)
+
+_model2_scaler_path = _find_scaler("model2_scaler.pkl")
+_model3_scaler_path = _find_scaler("model3_scaler.pkl")
 
 
 # ============================================================
@@ -207,21 +233,26 @@ print("=" * 70)
 print("                    SITEWISE AI")
 print("=" * 70)
 
-_custom_objs = {}
-if PAPNET_AVAILABLE:
-    _custom_objs["PatternAffinityModule"] = PatternAffinityModule
-    _custom_objs["PAPResidualBlock"] = PAPResidualBlock
+def _get_papnet_custom_objects():
+    try:
+        from training_papnet.papnet_model import PatternAffinityModule, PAPResidualBlock
+        return {
+            "PatternAffinityModule": PatternAffinityModule,
+            "PAPResidualBlock": PAPResidualBlock
+        }
+    except Exception:
+        return {}
 
 MODELS_POOL = {}
 
-# Load EfficientNetB0
-eff_model, eff_kind = load_model_flexible(_efficientnet_tflite, _efficientnet_keras)
+# Load EfficientNetB0 (ONNX -> TFLite -> Keras)
+eff_model, eff_kind = load_model_flexible(_efficientnet_onnx, _efficientnet_tflite, _efficientnet_keras)
 if eff_model:
     MODELS_POOL["efficientnet"] = eff_model
     print(f"✓ EfficientNetB0 loaded into pool ({eff_kind})")
 
-# Load PAPNet
-pap_model, pap_kind = load_model_flexible(_papnet_tflite, _papnet_keras, custom_objs=_custom_objs if _custom_objs else None)
+# Load PAPNet (ONNX -> TFLite -> Keras)
+pap_model, pap_kind = load_model_flexible(_papnet_onnx, _papnet_tflite, _papnet_keras, custom_objs_fn=_get_papnet_custom_objects)
 if pap_model:
     MODELS_POOL["papnet"] = pap_model
     print(f"✓ PAPNet loaded into pool ({pap_kind})")
@@ -243,7 +274,7 @@ print(f"✓ Active default Model 1: {MODEL1_NAME}")
 
 
 # Load Model 2 (Target Facility Suitability Predictor)
-model2, m2_kind = load_model_flexible(_model2_tflite, _model2_keras)
+model2, m2_kind = load_model_flexible(_model2_onnx, _model2_tflite, _model2_keras)
 model2_scaler = None
 if model2 and os.path.exists(_model2_scaler_path):
     try:
@@ -257,11 +288,11 @@ else:
 
 print()
 print("Loading Model 3...")
-model3, m3_kind = load_model_flexible(_model3_tflite, _model3_keras)
+model3, m3_kind = load_model_flexible(_model3_onnx, _model3_tflite, _model3_keras)
 if model3:
     print(f"✓ Model 3 loaded ({m3_kind})")
 else:
-    raise FileNotFoundError("Could not find or load Model 3 from models_optimized/ or models/.")
+    raise FileNotFoundError("Could not find or load Model 3 from models_onnx/, models_optimized/, or models/.")
 
 print()
 print("Loading Model 3 scaler...")

@@ -25,15 +25,22 @@ SiteWise-AI/
 ├── templates/
 │   └── index.html                 # Frontend Web Interface
 ├── static/
-│   ├── style.css                  # Styling
+│   ├── samples/                   # Real Sentinel-2 EuroSAT sample tiles
+│   ├── style.css                  # HUD animations & styling
 │   └── script.js                  # Frontend interactions
-├── models/                        # Trained model artifacts
-│   ├── model1_papnet.keras        # PAPNet Land Classifier
-│   ├── model1_efficientnet.keras  # EfficientNetB0 Land Classifier
-│   ├── model2_suitability.keras   # Model 2: Site Suitability Predictor
-│   ├── model2_scaler.pkl          # Model 2 Scaler
-│   ├── model3_recommender.keras   # Model 3: Site Recommender (8 profiles)
-│   └── model3_scaler.pkl          # Model 3 Scaler
+├── models_onnx/                   # Ultra-lightweight ONNX models (RAM ~100MB, Render-ready)
+│   ├── model1_papnet.onnx
+│   ├── model1_efficientnet.onnx
+│   ├── model2_suitability.onnx
+│   ├── model3_recommender.onnx
+│   └── *.pkl
+├── models_optimized/              # Quantized LiteRT / TFLite models (RAM ~120MB)
+│   ├── model1_papnet.tflite
+│   ├── model1_efficientnet.tflite
+│   └── ...
+├── models/                        # Full Keras model artifacts
+│   ├── model1_papnet.keras
+│   └── ...
 ├── training/                      # Original EfficientNet training notebook & artifacts
 │   ├── project_notebook.ipynb
 │   └── ...
@@ -109,3 +116,20 @@ MODEL1_TYPE=efficientnet python app.py
 
 Open:
 [http://127.0.0.1:5000](http://127.0.0.1:5000)
+
+---
+
+## 6. Deploying to Render.com (512MB RAM Free Tier)
+
+This repository is optimized for memory-constrained platforms like Render.com:
+- **Zero TensorFlow Overhead**: Runs on pure **ONNX Runtime** (`onnxruntime`) or **LiteRT** (`ai-edge-litert`).
+- **RAM Footprint**: **~100MB – 120MB**, leaving over 380MB of headroom on Render's 512MB tier.
+- **Preconfigured**: `Procfile` and `render.yaml` are included.
+
+### Render Configuration:
+- **Build Command**: `pip install -r requirements.txt`
+- **Start Command**: `gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 app:app`
+- **Environment Variables**:
+  - `PYTHON_VERSION`: `3.11.9`
+  - `MODEL1_TYPE`: `papnet`
+
