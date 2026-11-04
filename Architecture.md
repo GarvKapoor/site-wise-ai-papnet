@@ -303,3 +303,4 @@ For deployment on memory-constrained infrastructure (such as free-tier cloud con
 1. **ONNX Runtime (`.onnx`)**: Graph-optimized static models run using single-threaded CPU execution providers (`intra_op_num_threads = 1`), reducing runtime memory overhead to **$< 115\text{ MB}$ RAM**.
 2. **LiteRT / TFLite (`.tflite`)**: Quantized flatbuffer models executed through Google's standalone LiteRT interpreter with XNNPACK acceleration, consuming **$\approx 120\text{ MB}$ RAM**.
 3. **Lazy-Load Fallback**: Full deep learning frameworks are prevented from loading into process memory unless specifically required, ensuring rock-solid stability and zero Out-of-Memory (OOM) termination.
+
